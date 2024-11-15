@@ -12,8 +12,7 @@ class MainFrame(wx.Frame):
         self.Center()
         self.SetMinSize((400, 400))
 
-        self.wxconfig = wx.Config("PacketPlayer")
-        self.panel = Panel(self, wxconfig=self.wxconfig)
+        self.panel = Panel(self)
 
         menubar = wx.MenuBar()
         helpMenu = wx.Menu()
@@ -24,8 +23,8 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self.on_about, id=wx.ID_ABOUT)
         self.SetMenuBar(menubar)
 
-        self.CreateStatusBar(number=2, style=wx.STB_SIZEGRIP | wx.STB_ELLIPSIZE_END)
-        self.SetStatusWidths([-1, 100])
+        self.CreateStatusBar(number=3, style=wx.STB_SIZEGRIP | wx.STB_ELLIPSIZE_END)
+        self.SetStatusWidths([-1, 300, 200])
         self.SetStatusText("Welcome :)",0)
 
     def on_about(self, event):

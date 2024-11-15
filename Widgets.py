@@ -1,77 +1,161 @@
+from cProfile import label
+
 import wx
-import wx.lib.scrolledpanel as scrolled
 import threading
+from typing import Dict, List, Tuple
 
-class DeviceListView(scrolled.ScrolledPanel):
-    def __init__(self, parent):
+
+class Device:
+    def __init__(self, alias: str, control_ip: str) -> None:
+        self.alias: str = alias
+        self.control_ip: str = control_ip
+        self.username: str = ''
+        self.password: str = ''
+        self.deploy = False      # Used to keep track of devices that have been configured or not.
+
+    def __str__(self) -> str:
+        return f"Device(alias={self.alias}, ip={self.control_ip}, username={self.username}, password={self.password})"
+
+
+class DeviceListView(wx.Panel):
+    def __init__(self, parent: wx.Window) -> None:
         super().__init__(parent)
-        self.main_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.main_sizer: wx.BoxSizer = wx.BoxSizer(wx.VERTICAL)
 
-        self.panel = wx.Panel(self)
-        self.sizer = wx.GridBagSizer(vgap=5, hgap=5)
+        self.device_list_ctrl: wx.ListCtrl = wx.ListCtrl(self, style=wx.LC_REPORT | wx.BORDER_SUNKEN)
+        self.device_list_ctrl.InsertColumn(0, 'Device Type', width=220)
+        self.device_list_ctrl.InsertColumn(1, 'Number of Devices', width=140)
+        self.device_list_ctrl.InsertColumn(2, 'Configured', width=100)
 
-        headers = ['Index', 'Control IP', 'Alias', 'Device Type', 'Probe Type', 'Username', 'Password']
-        for col, header in enumerate(headers):
-            lbl = wx.StaticText(self.panel, label=header)
-            self.sizer.Add(lbl, pos=(0, col), flag=wx.ALL, border=5)
+        self.device_list_ctrl.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.on_device_type_double_click)
 
-        self.row_count = 1
-        self.controls = []
-
-        self.panel.SetSizer(self.sizer)
-
-        self.main_sizer.Add(self.panel, 1, wx.EXPAND)
+        self.main_sizer.Add(self.device_list_ctrl, 1, wx.EXPAND | wx.ALL, 5)
         self.SetSizer(self.main_sizer)
 
-        self.SetupScrolling(scroll_x=True, scroll_y=True)
+        self.device_types: Dict[str, List[Device]] = {}
+        self.device_credentials: Dict[str, Tuple[str, str]] = {}
 
-    def add_devices(self, devices):
+    def add_devices(self, device_types: Dict[str, List[Device]]) -> None:
         """Runs the device-adding process in a new thread."""
-        self.Freeze()
-        threading.Thread(target=self._add_devices_thread, args=(devices,)).start()
+        threading.Thread(target=self._add_devices_thread, args=(device_types,)).start()
 
-    def _add_devices_thread(self, devices):
-        for control_ip, alias, device_type in devices:
-            wx.CallAfter(self._add_device_row, control_ip, alias, device_type)
+    def _add_devices_thread(self, device_types: Dict[str, List[Device]]) -> None:
+        wx.CallAfter(self.device_list_ctrl.DeleteAllItems)
+        self.device_types = device_types
 
-        wx.CallAfter(self.panel.Layout)
-        wx.CallAfter(self.FitInside)
-        wx.CallAfter(self.Thaw)
+        for device_type, devices in device_types.items():
+            index: int = self.device_list_ctrl.InsertItem(self.device_list_ctrl.GetItemCount(), device_type)
+            self.device_list_ctrl.SetItem(index, 1, str(len(devices)))
+            self.device_list_ctrl.SetItem(index, 2, f'0 out of {str(len(devices))}')
 
-    def _add_device_row(self, control_ip, alias, device_type):
-        row = self.row_count
-        index = wx.StaticText(self.panel, label=str(row))
-        ip = wx.StaticText(self.panel, label=control_ip)
-        al = wx.StaticText(self.panel, label=alias)
-        device = wx.StaticText(self.panel, label=device_type)
-        probe = wx.ComboBox(self.panel, choices=['Ubuntu'], style=wx.CB_READONLY)
-        probe.SetSelection(0)
-        username = wx.TextCtrl(self.panel)
-        password = wx.TextCtrl(self.panel)
+    def on_device_type_double_click(self, event: wx.ListEvent) -> None:
+        device_type: str = event.GetText()
+        devices: List[Device] = self.device_types.get(device_type, [])
+        DevicePopup(self, device_type, devices).ShowModal()
 
-        # Add each widget to the sizer in the correct position
-        self.sizer.Add(index, pos=(row, 0), flag=wx.ALL | wx.ALIGN_CENTER, border=5)
-        self.sizer.Add(ip, pos=(row, 1), flag=wx.EXPAND | wx.ALL, border=5)
-        self.sizer.Add(al, pos=(row, 2), flag=wx.EXPAND | wx.ALL, border=5)
-        self.sizer.Add(device, pos=(row, 3), flag=wx.EXPAND | wx.ALL, border=5)
-        self.sizer.Add(probe, pos=(row, 4), flag=wx.EXPAND | wx.ALL, border=5)
-        self.sizer.Add(username, pos=(row, 5), flag=wx.EXPAND | wx.ALL, border=5)
-        self.sizer.Add(password, pos=(row, 6), flag=wx.EXPAND | wx.ALL, border=5)
+    def mark_configured(self, device_type: str, configured, total) -> None:
+        """Number is the number of devices configured in a given device type"""
+        print(f'{device_type}  {configured} out of {total}')
+        for index in range(self.device_list_ctrl.GetItemCount()):
+            if self.device_list_ctrl.GetItemText(index) == device_type:
+                self.device_list_ctrl.SetItem(index, 2, f'{configured} out of {total}')
+                break
 
-        self.controls.append((device_type, index, ip, al, device, probe, username, password))
-        self.row_count += 1
+class DevicePopup(wx.Dialog):
+    def __init__(self, parent, device_type: str, devices: List[Device]) -> None:
+        super().__init__(parent, title=f"Devices for {device_type}", size=(600, 400))
+        self.parent = parent
+        self.device_type: str = device_type
+        self.devices: List[Device] = devices
 
-    def clear(self):
-        self.Freeze()
-        try:
-            for controls in self.controls:
-                for control in controls[1:]:  # Skip the device type element
-                    control.Destroy()
-            self.controls.clear()
-            self.row_count = 1
+        self.main_sizer: wx.BoxSizer = wx.BoxSizer(wx.VERTICAL)
 
-            self.sizer.Clear()
-            self.panel.Layout()
-            self.FitInside()
-        finally:
-            self.Thaw()
+        top_grid= wx.GridBagSizer()
+        self.username_label_all: wx.StaticText = wx.StaticText(self, label="Username (All):")
+        self.username_text_all: wx.TextCtrl = wx.TextCtrl(self, size=(90, -1))
+        self.password_label_all: wx.StaticText = wx.StaticText(self, label="Password (All):")
+        self.password_text_all: wx.TextCtrl = wx.TextCtrl(self, size=(90, -1))
+        self.apply_all_button: wx.Button = wx.Button(self, label="Apply All")
+        top_grid.Add(self.username_label_all, pos=(0, 0), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        top_grid.Add(self.username_text_all, pos=(0, 1), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        top_grid.Add(self.password_label_all, pos=(0, 2), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        top_grid.Add(self.password_text_all, pos=(0, 3), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        top_grid.Add(self.apply_all_button, pos=(0, 4), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+
+        # Create a scrolled panel for the bottom grid
+        scrolled_panel = wx.ScrolledWindow(self, style=wx.VSCROLL | wx.HSCROLL)
+        scrolled_panel.SetScrollRate(5, 5)
+        bottom_grid = wx.GridBagSizer()
+        self.device_controls: Dict[Device, Tuple[wx.CheckBox, wx.TextCtrl, wx.TextCtrl]] = {}
+
+        bottom_grid.Add(wx.StaticText(scrolled_panel, label="Deploy"), pos=(0, 0),
+                        flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        bottom_grid.Add(wx.StaticText(scrolled_panel, label="Alias"), pos=(0, 1),
+                        flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        bottom_grid.Add(wx.StaticText(scrolled_panel, label="Control IP"), pos=(0, 2),
+                        flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        bottom_grid.Add(wx.StaticText(scrolled_panel, label="Username"), pos=(0, 3),
+                        flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        bottom_grid.Add(wx.StaticText(scrolled_panel, label="Password"), pos=(0, 4),
+                        flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+
+        for i, device in enumerate(devices):
+            deploy_chk_bx = wx.CheckBox(scrolled_panel)
+            if device.deploy:
+                deploy_chk_bx.SetValue(True)
+            alias_label: wx.StaticText = wx.StaticText(scrolled_panel, label=device.alias)
+            control_ip_label: wx.StaticText = wx.StaticText(scrolled_panel, label=device.control_ip)
+            username_text: wx.TextCtrl = wx.TextCtrl(scrolled_panel, size=(90, -1))
+            username_text.SetValue(device.username)
+            password_text: wx.TextCtrl = wx.TextCtrl(scrolled_panel, size=(90, -1))
+            password_text.SetValue(device.password)
+
+            bottom_grid.Add(deploy_chk_bx, pos=(i + 1, 0), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+            bottom_grid.Add(alias_label, pos=(i+1, 1), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+            bottom_grid.Add(control_ip_label, pos=(i+1, 2), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+            bottom_grid.Add(username_text, pos=(i+1, 3), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+            bottom_grid.Add(password_text, pos=(i+1, 4), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+            self.device_controls[device] = (deploy_chk_bx, username_text, password_text)
+
+        scrolled_panel.SetSizer(bottom_grid)
+        scrolled_panel.FitInside()
+
+        self.main_sizer.Add(top_grid, 0, wx.ALL | wx.CENTER, 5)
+        self.main_sizer.Add(scrolled_panel, 1, wx.EXPAND | wx.ALL, 20)
+
+        self.save_button: wx.Button = wx.Button(self, label="Save")
+        self.cancel_button: wx.Button = wx.Button(self, label="Cancel")
+        self.button_sizer: wx.BoxSizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.button_sizer.Add(self.save_button, 0, wx.ALL, 5)
+        self.button_sizer.Add(self.cancel_button, 0, wx.ALL, 5)
+        self.main_sizer.Add(self.button_sizer, 0, wx.ALIGN_CENTER)
+
+        self.SetSizer(self.main_sizer)
+
+        self.save_button.Bind(wx.EVT_BUTTON, self.on_save)
+        self.cancel_button.Bind(wx.EVT_BUTTON, self.on_cancel)
+        self.apply_all_button.Bind(wx.EVT_BUTTON, self.on_apply_all)
+
+    def on_save(self, event: wx.Event) -> None:
+        total = 0
+        configured = 0
+        for device, (deploy_chk_bx, username_text, password_text) in self.device_controls.items():
+            device.username = username_text.GetValue()
+            device.password = password_text.GetValue()
+            device.deploy = deploy_chk_bx.IsChecked()
+            if device.deploy:
+                configured += 1
+            total += 1
+        self.parent.mark_configured(self.device_type, configured, total)
+        self.Close()
+
+    def on_cancel(self, event: wx.Event) -> None:
+        self.Close()
+
+    def on_apply_all(self, event: wx.Event) -> None:
+        username: str = self.username_text_all.GetValue()
+        password: str = self.password_text_all.GetValue()
+        for device, (deploy_chk_bx, username_text, password_text) in self.device_controls.items():
+            deploy_chk_bx.SetValue(True)
+            username_text.SetValue(username)
+            password_text.SetValue(password)

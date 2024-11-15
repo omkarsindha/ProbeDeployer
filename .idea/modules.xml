@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/SyslogInterceptor.iml" filepath="$PROJECT_DIR$/.idea/SyslogInterceptor.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/ProbeDeployer.iml" filepath="$PROJECT_DIR$/.idea/ProbeDeployer.iml" />
     </modules>
   </component>
 </project>
