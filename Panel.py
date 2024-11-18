@@ -32,7 +32,7 @@ class Panel(wx.Panel):
         self.fetch: wx.Button = wx.Button(self, label="Fetch")
         self.fetch.Bind(wx.EVT_BUTTON, self.on_fetch)
 
-        self.deploy: wx.Button = wx.Button(self, label="Deploy Probe")
+        self.deploy: wx.Button = wx.Button(self, label="Start Deployment")
         self.deploy.Bind(wx.EVT_BUTTON, self.on_deploy)
 
         self.list: Widgets.DeviceListView = Widgets.DeviceListView(self)
@@ -78,25 +78,26 @@ class Panel(wx.Panel):
     def on_deploy(self, event: wx.Event) -> None:
 
         if self.deploy_thread is not None:
-            self.error_prompt("Already deploying probes")
+            self.error_alert("Already deploying probes.")
             return
 
         if self.device_types == {}:
-            self.error_prompt("No devices to deploy probes on, try fetching to get insite devices")
+            self.error_alert("No devices to deploy probes on, try fetching to get insite devices.")
             return
 
         total = 0
         configured = 0
         for device_key, device_list in self.device_types.items():
-            print(f"Device Key: {device_key}")
             for device in device_list:
                 if device.deploy:
                     configured += 1
                 total += 1
         if configured == 0:
-            self.error_prompt("None of the device has been configured.")
+            self.error_alert("None of the device has been configured.")
             return
-
+        if configured < total:
+            if not self.informational_alert(f"You have configured {configured} out of total {total} devices. Do you want to continue?"):
+                return
         self.deploy_thread = Threads.DeployProbesThread(self.device_types)
         self.deploy_thread.total_devices = configured
         self.timer.Start(300)
@@ -106,50 +107,51 @@ class Panel(wx.Panel):
         threading.Thread(target=self._fetch_data).start()
 
     def _fetch_data(self) -> None:
-        ip: str = self.insite_ip.GetValue()
-        user: str = self.user_input.GetValue()
-        password: str = self.pass_input.GetValue()
-
-        if not utils.is_valid_ip(ip):
-            wx.CallAfter(self.error_prompt, "Magnum Analytics IP is not valid.")
-            return
-
-        login_url: str = f"https://{ip}:50443/api/-/login"
-        login_payload: dict = {
-            'username': user,
-            'password': password
-        }
-
-        try:
-            login_response: requests.Response = requests.post(login_url, json=login_payload, verify=False)
-            response_json: dict = login_response.json()
-
-            if response_json.get("status") != "ok":
-                wx.CallAfter(self.error_prompt, "Incorrect Username/Password")
-                return
-
-            # Proceed to fetch device identity settings
-            url: str = f"https://{ip}:50443/api/-/settings/device-identity"
-            response: requests.Response = requests.get(url, verify=False)
-            data: dict = response.json()
-
-            self.device_types = {}
-            for device in data['devices']:
-                identification: dict = device['identification']
-                alias: str = identification.get('alias')
-                control_ip: str = identification.get('control-ips', [])[0]
-                device_type: str = identification.get('device-type')
-                if utils.is_valid_ip(control_ip):
-                    if device_type not in self.device_types:
-                        self.device_types[device_type] = [Widgets.Device(alias, control_ip)]
-                    else:
-                        self.device_types[device_type].append(Widgets.Device(alias, control_ip))
-
-            #    self.device_types = {"Test Device":[Device("Ubuntu server","172.17.235.12")]}
-            wx.CallAfter(self.list.add_devices, self.device_types)
-        except requests.RequestException as e:
-            # Handle any connection errors
-            wx.CallAfter(self.error_prompt, f"Failed to connect: {str(e)}")
+        # ip: str = self.insite_ip.GetValue()
+        # user: str = self.user_input.GetValue()
+        # password: str = self.pass_input.GetValue()
+        #
+        # if not utils.is_valid_ip(ip):
+        #     wx.CallAfter(self.error_alert, "Magnum Analytics IP is not valid.")
+        #     return
+        #
+        # login_url: str = f"https://{ip}:50443/api/-/login"
+        # login_payload: dict = {
+        #     'username': user,
+        #     'password': password
+        # }
+        #
+        # try:
+        #     login_response: requests.Response = requests.post(login_url, json=login_payload, verify=False)
+        #     response_json: dict = login_response.json()
+        #
+        #     if response_json.get("status") != "ok":
+        #         wx.CallAfter(self.error_alert, "Incorrect Username/Password")
+        #         return
+        #
+        #     # Proceed to fetch device identity settings
+        #     url: str = f"https://{ip}:50443/api/-/settings/device-identity"
+        #     response: requests.Response = requests.get(url, verify=False)
+        #     data: dict = response.json()
+        #
+        #     self.device_types = {}
+        #     for device in data['devices']:
+        #         identification: dict = device['identification']
+        #         alias: str = identification.get('alias')
+        #         control_ip: str = identification.get('control-ips', [])[0]
+        #         device_type: str = identification.get('device-type')
+        #         if utils.is_valid_ip(control_ip):
+        #             if device_type not in self.device_types:
+        #                 self.device_types[device_type] = [Widgets.Device(alias, control_ip)]
+        #             else:
+        #                 self.device_types[device_type].append(Widgets.Device(alias, control_ip))
+        #
+             self.device_types = {"Test Device Type": [Widgets.Device("Ubuntu Test Server 1 ", "172.17.235.12"),
+                                                       Widgets.Device("Ubuntu Test Server 2 ", "172.17.235.12")]}
+             wx.CallAfter(self.list.add_devices, self.device_types)
+        # except requests.RequestException as e:
+        #     # Handle any connection errors
+        #     wx.CallAfter(self.error_alert, f"Failed to connect: {str(e)}")
 
     def set_status_text(self, text: str, number: int) -> None:
         self.parent.SetStatusText(text, number)
@@ -159,12 +161,25 @@ class Panel(wx.Panel):
         self.set_status_text(self.deploy_thread.status, 0)
         self.set_status_text(f"Deploying on {self.deploy_thread.current_device}", 1)
         self.set_status_text(f"Completed {self.deploy_thread.completed_device}/{self.deploy_thread.total_devices}", 2)
+        if self.deploy_thread.end_event.is_set():
+            successful = self.deploy_thread.successful_devices
+            total = self.deploy_thread.total_devices
+            self.set_status_text(f"Deployment completed :) Probe successfully deployed on {successful} out of {total} devices.", 0)
+            self.set_status_text("", 1)
+            self.timer.Stop()
         pass
 
-    def error_prompt(self, message: str) -> None:
+    def error_alert(self, message: str) -> None:
         dlg: wx.MessageDialog = wx.MessageDialog(self, message, "Error", wx.OK | wx.ICON_ERROR)
         dlg.ShowModal()
         dlg.Destroy()
+
+    def informational_alert(self, message: str) -> bool:
+        dlg = wx.MessageDialog(self, message, "Continue?", wx.YES_NO | wx.ICON_INFORMATION)
+        result = dlg.ShowModal()
+        dlg.Destroy()
+        return result == wx.ID_YES
+    
 # End class Panel(wx.Panel)
 
 

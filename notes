@@ -1,6 +1,13 @@
-Configured shows number of devices configured
+To delete a probe from device completely:
+
+Go to setup folder in the probe package and run ./install and uninstall it from the options.
+Go to /opt and "sudo rm -rf evertz".\
+sudo rm -rf /bin/insite-probe (check if this is needed)
+sudo rm /lib/systemd/system/insite-probe.service
 
 
 
 
-Taking care of total / completed devices and skipping not deployed devices
+test servers
+172.17.223.3
+172.17.223.3232

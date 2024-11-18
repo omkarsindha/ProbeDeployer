@@ -15,37 +15,53 @@ class DeployProbesThread(threading.Thread):
         self.device_types = device_types
 
         self.total_devices = 0
+        self.successful_devices = 0
         self.completed_device = 0
         self.current_device = ""
-        self.status = "" # Will hold the status for current task
+        self.status = ""
+        current_date_time = time.strftime("%Y-%m-%d_%H-%M-%S")
+        self.log_file = open(f"log-{current_date_time}.txt", "w")
 
         self.end_event = threading.Event()
         self.start()
+
+    def log(self, message):
+        self.log_file.write(f"{message}\n")
+        self.log_file.flush()
+        print(message)
+        self.status = message
 
     def run(self):
         base_url = "https://172.17.223.4"
         local_path = "probe_package.tar"
         for device_type, devices in self.device_types.items():
             for device in devices:
+                self.current_device = device.alias
+                self.log("-----------------------------")
+                self.log(f"Alais - {self.current_device} Control IP - {device.control_ip}")
                 if not device.deploy:
+                    self.log("Device not selected for deployment. Skipping Device")
                     continue
 
-                self.current_device = device.alias
-
-                print(f"Processing device: {device}")
                 remote_temp_path = f"/home/{device.username}/{local_path}"
                 remote_final_path = f'/opt/evertz/insite/probe/{local_path}'
                 # Download the file
                 if self.download_file(base_url, local_path):
+                    self.log("Probe Package Download Successful")
                     # SCP the file to the device
                     if self.scp_file(local_path, remote_temp_path, device.control_ip, 22, device.username, device.password):
+                        self.log("Probe Package SCP successful to device")
                         # SSH and run commands on the device
-                        self.ssh_and_run_commands(device.control_ip, 22, device.username, device.password, remote_temp_path, remote_final_path)
+                        if self.ssh_and_run_commands(device.control_ip, 22, device.username, device.password, remote_temp_path, remote_final_path, local_path):
+                            self.log("Probe Deployed Successfully")
+                            self.successful_devices += 1
                 self.completed_device += 1
                 # Delete the local file
                 if os.path.exists(local_path):
                     self.status = "Deleting locally downloaded Probe package"
                     os.remove(local_path)
+        self.end_event.set()
+        self.log_file.close()
 
     def download_file(self, base_url, local_path):
         url = f"{base_url}/api/-/model/probes?static-asset=true"
@@ -73,6 +89,7 @@ class DeployProbesThread(threading.Thread):
             path = response_data.get('path')
 
             if path:
+                self.log("Path retrieved successfully")
                 download_url = f"{base_url}/probe/download/{path}"
 
                 # To get content length
@@ -92,13 +109,18 @@ class DeployProbesThread(threading.Thread):
                                     downloaded_mb = downloaded_size / (1024 * 1024)
                                     total_mb = total_size / (1024 * 1024)
                                     self.status = f"Downloading Probe Package: {downloaded_mb:.2f}/{total_mb:.2f} MB ({progress:.2f}%)"
+                            self.log("File downloaded successfully")
                             self.status = "\nFile downloaded successfully."
                             return True
                     else:
-                        self.status = f"Failed to download file. Status code: {download_response.status_code}"
+                        msg = f"Failed to download file. Status code: {download_response.status_code}"
+                        self.log(msg)
+                        self.status = msg
                         return False
         else:
-            self.status = f"Failed to get download path. Status code: {response.status_code}"
+            msg = f"Failed to get download path. Status code: {response.status_code}"
+            self.log(msg)
+            self.status = msg
             return False
 
     def scp_file(self, local_path, remote_temp_path, ssh_host, ssh_port, ssh_username, ssh_password):
@@ -107,39 +129,42 @@ class DeployProbesThread(threading.Thread):
 
         try:
             ssh.connect(ssh_host, port=ssh_port, username=ssh_username, password=ssh_password)
+            self.log("SCP Started")
             print("Now SCP the file to device")
 
             def progress(filename, size, sent):
+                if isinstance(filename, bytes):
+                    filename = filename.decode('utf-8')
                 sent_mb = sent / (1024 * 1024)
                 size_mb = size / (1024 * 1024)
                 progress_percentage = (sent / size) * 100
                 self.status = f"Transferring {filename} to device: {sent_mb:.2f}/{size_mb:.2f} MB ({progress_percentage:.2f}%)"
-                print(self.status, end="\r")
 
             with SCPClient(ssh.get_transport(), progress=progress) as scp:
                 scp.put(local_path, remote_temp_path)
-
-            print("\nSCP Complete")
             return True
+        except Exception as e:
+            self.log(f"SCP failed: {str(e)}")
+            return False
         finally:
             ssh.close()
 
-    def ssh_and_run_commands(self, host, port, username, password, remote_temp_path, remote_final_path) -> bool:
+    def ssh_and_run_commands(self, host, port, username, password, remote_temp_path, remote_final_path, file_name) -> bool:
         try:
             transport = paramiko.Transport((host, port))
             transport.start_client()
         except paramiko.SSHException as err:
-            print(str(err))
+            self.log(f"SSH Failed: {str(err)}")
             return False
 
         try:
             transport.auth_password(username=username, password=password)
         except paramiko.SSHException as err:
-            print(str(err))
+            self.log(f"SSH Failed: {str(err)}")
             return False
 
         if not transport.is_authenticated():
-            print("Authentication failed.")
+            self.log(f"SSH Authorization Failed")
             return False
 
         channel = transport.open_session()
@@ -168,29 +193,29 @@ class DeployProbesThread(threading.Thread):
 
         channel.send('sudo -s\n')
         read_until(channel, b'[sudo] password for', 5)
+
         channel.send(password + '\n')
         read_until(channel, b'#', 5)
 
         # Now you are in a root shell, you can run commands as root
-        channel.send('mkdir -p /opt/evertz/insite/probe\n')
-        read_until(channel, b'#', 5)
-
-        #channel.send(f'mv {remote_temp_path} {remote_final_path}\n')
-        #read_until(channel, b'#', 5)
-
         commands = [
+            'mkdir -p /opt/evertz/insite/probe',
+            f'mv {remote_temp_path} {remote_final_path}',
             'cd /opt/evertz/insite/probe',
-            'sudo tar -xvf probe_package.tar',
+            f'sudo tar -xvf {file_name}',
             'cd /opt/evertz/insite/probe/insite-probe/setup',
             'chmod +x ./install',
-            'echo "yes" | echo "1" | ./install'
+            'rm -f user_consent.json',  # So that the script asks for consent even if Consent has already been given
+            'rm -rf /bin/insite-probe',
+            'echo -e "1\nyes" | ./install'
         ]
 
         for command in commands:
-            print(f"Command: {command}")
             channel.send(command + '\n')
             out = read_until(channel, b'#', 5)
+            print(f"Command: {command}")
             print(f"Output: {out}")
+            time.sleep(0.5)
 
         # Check the status of the insite-probe service
         channel.send('systemctl status insite-probe\n')
@@ -199,12 +224,15 @@ class DeployProbesThread(threading.Thread):
 
         if 'active (running)' not in output:
             channel.send('systemctl start insite-probe\n')
-            read_until(channel, b'#', 5)
-            print('Probe started.')
+            output = read_until(channel, b'#', 5)
+            print(output)
 
-        channel.send('systemctl status insite-probe\n')
-        output = read_until(channel, b'#', 5)
-        print(output)
-        return True
+            time.sleep(0.5)
+            channel.send('systemctl status insite-probe\n')
+            output = read_until(channel, b'#', 5)
+            print(output)
+
         transport.close()
+        return True
+
 
