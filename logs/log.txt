@@ -1,6 +1,0 @@
------------------------------
-Alais - Ubuntu Test Server 1  Control IP - 172.17.235.12
-Path retrieved successfully
-File downloaded successfully
-Probe Package Download Successful
-SCP Started

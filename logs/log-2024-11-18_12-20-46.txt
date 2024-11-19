@@ -1,2 +1,0 @@
------------------------------
-Alais - Ubuntu Test Server 1  Control IP - 172.17.235.12
