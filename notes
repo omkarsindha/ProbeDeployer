@@ -9,5 +9,6 @@ sudo rm /lib/systemd/system/insite-probe.service
 
 
 test servers
+172.17.223.12
 172.17.223.3
-172.17.223.3232
+172.17.223.32

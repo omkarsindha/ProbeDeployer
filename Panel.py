@@ -1,4 +1,3 @@
-import wx.lib.intctrl
 import wx
 import threading
 import os
@@ -7,13 +6,14 @@ import Widgets
 import Threads
 import utils
 import requests
-
+import Config
 
 class Panel(wx.Panel):
     def __init__(self, parent) -> None:
         wx.Panel.__init__(self, parent)
         self.parent= parent
 
+        self.fetch_insite = ""      # Stores the IP of fetched Insite IP
         self.device_types: Dict[str, List[Widgets.Device]] = {}
         self.deploy_thread = None
 
@@ -78,11 +78,11 @@ class Panel(wx.Panel):
     def on_deploy(self, event: wx.Event) -> None:
 
         if self.deploy_thread is not None:
-            self.error_alert("Already deploying probes.")
+            self.error_alert("Probes are already being deployed.")
             return
 
         if self.device_types == {}:
-            self.error_alert("No devices to deploy probes on, try fetching to get insite devices.")
+            self.error_alert("No devices available for probe deployment. Please fetch devices first.")
             return
 
         total = 0
@@ -93,12 +93,12 @@ class Panel(wx.Panel):
                     configured += 1
                 total += 1
         if configured == 0:
-            self.error_alert("None of the device has been configured.")
+            self.error_alert("No devices have been configured for deployment.")
             return
         if configured < total:
-            if not self.informational_alert(f"You have configured {configured} out of total {total} devices. Do you want to continue?"):
+            if not self.informational_alert(f"{configured} out of {total} devices have been configured. Do you want to continue?"):
                 return
-        self.deploy_thread = Threads.DeployProbesThread(self.device_types)
+        self.deploy_thread = Threads.DeployProbesThread(self.fetch_insite, self.device_types)
         self.deploy_thread.total_devices = configured
         self.timer.Start(300)
 
@@ -114,6 +114,8 @@ class Panel(wx.Panel):
         # if not utils.is_valid_ip(ip):
         #     wx.CallAfter(self.error_alert, "Magnum Analytics IP is not valid.")
         #     return
+        #
+        # self.fetch_insite = ip
         #
         # login_url: str = f"https://{ip}:50443/api/-/login"
         # login_payload: dict = {
@@ -145,10 +147,13 @@ class Panel(wx.Panel):
         #                 self.device_types[device_type] = [Widgets.Device(alias, control_ip)]
         #             else:
         #                 self.device_types[device_type].append(Widgets.Device(alias, control_ip))
-        #
-             self.device_types = {"Test Device Type": [Widgets.Device("Ubuntu Test Server 1 ", "172.17.235.12"),
-                                                       Widgets.Device("Ubuntu Test Server 2 ", "172.17.235.12")]}
-             wx.CallAfter(self.list.add_devices, self.device_types)
+
+         self.device_types = {"Test Device Type 1": [Widgets.Device("Ubuntu Test Server 1 ", "172.17.235.12"),
+                                                   Widgets.Device("Ubuntu Test Server 2 ", "172.17.235.3"),
+                                                   Widgets.Device("Ubuntu Test Server 3 ", "172.17.235.32")],
+                              "Test Device Type 2": [Widgets.Device("Cent OS Test Server", "172.17.235.89"),
+                                                   Widgets.Device("Debian Test Server 2 ", "172.17.235.34"),]}
+         wx.CallAfter(self.list.add_devices, self.device_types)
         # except requests.RequestException as e:
         #     # Handle any connection errors
         #     wx.CallAfter(self.error_alert, f"Failed to connect: {str(e)}")
@@ -164,7 +169,7 @@ class Panel(wx.Panel):
         if self.deploy_thread.end_event.is_set():
             successful = self.deploy_thread.successful_devices
             total = self.deploy_thread.total_devices
-            self.set_status_text(f"Deployment completed :) Probe successfully deployed on {successful} out of {total} devices.", 0)
+            self.set_status_text(f"Deployment completed. Successfully deployed probes on {successful} out of {total} devices.", 0)
             self.set_status_text("", 1)
             self.timer.Stop()
         pass
@@ -179,7 +184,7 @@ class Panel(wx.Panel):
         result = dlg.ShowModal()
         dlg.Destroy()
         return result == wx.ID_YES
-    
+
 # End class Panel(wx.Panel)
 
 

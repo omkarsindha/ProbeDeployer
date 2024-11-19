@@ -7,37 +7,38 @@ import json
 import paramiko
 from scp import SCPClient
 import time
-
+import Config
 
 class DeployProbesThread(threading.Thread):
-    def __init__(self, device_types: Dict[str, List[Device]]):
+    def __init__(self, insite_ip, device_types: Dict[str, List[Device]]):
         super().__init__()
         self.device_types = device_types
-
+        self.insite_ip = insite_ip
         self.total_devices = 0
         self.successful_devices = 0
         self.completed_device = 0
         self.current_device = ""
         self.status = ""
         current_date_time = time.strftime("%Y-%m-%d_%H-%M-%S")
-        self.log_file = open(f"log-{current_date_time}.txt", "w")
+        self.log_file = open(f"logs/log-{current_date_time}.txt", "w")
 
         self.end_event = threading.Event()
         self.start()
 
-    def log(self, message):
+    def log(self, message, status=True):
         self.log_file.write(f"{message}\n")
         self.log_file.flush()
         print(message)
-        self.status = message
+        if status:
+            self.status = message
 
     def run(self):
-        base_url = "https://172.17.223.4"
+        base_url = f"https://{self.insite_ip}"
         local_path = "probe_package.tar"
         for device_type, devices in self.device_types.items():
             for device in devices:
                 self.current_device = device.alias
-                self.log("-----------------------------")
+                self.log("-----------------------------", False)
                 self.log(f"Alais - {self.current_device} Control IP - {device.control_ip}")
                 if not device.deploy:
                     self.log("Device not selected for deployment. Skipping Device")
@@ -46,50 +47,37 @@ class DeployProbesThread(threading.Thread):
                 remote_temp_path = f"/home/{device.username}/{local_path}"
                 remote_final_path = f'/opt/evertz/insite/probe/{local_path}'
                 # Download the file
-                if self.download_file(base_url, local_path):
-                    self.log("Probe Package Download Successful")
+                if self.download_file(device.type, base_url, local_path):
+                    self.log("Probe package downloaded successfully.")
                     # SCP the file to the device
                     if self.scp_file(local_path, remote_temp_path, device.control_ip, 22, device.username, device.password):
-                        self.log("Probe Package SCP successful to device")
+                        self.log("Probe package SCP to device successful.")
                         # SSH and run commands on the device
                         if self.ssh_and_run_commands(device.control_ip, 22, device.username, device.password, remote_temp_path, remote_final_path, local_path):
-                            self.log("Probe Deployed Successfully")
+                            self.log("Probe deployed successfully,")
                             self.successful_devices += 1
                 self.completed_device += 1
                 # Delete the local file
                 if os.path.exists(local_path):
-                    self.status = "Deleting locally downloaded Probe package"
+                    self.status = "Deleting locally downloaded probe package."
                     os.remove(local_path)
         self.end_event.set()
         self.log_file.close()
 
-    def download_file(self, base_url, local_path):
+    def download_file(self, probe_type:str, base_url, local_path):
         url = f"{base_url}/api/-/model/probes?static-asset=true"
         headers = {
             "Content-Type": "application/json"
         }
-        payload = {
-            "type": "ubuntu",
-            "os": {
-                "family": "linux",
-                "architecture": "amd64"
-            },
-            "bits": 64,
-            "archive-type": "TAR",
-            "port": 22222,
-            "beats": {
-                "filebeat": True,
-                "metricbeat": True
-            }
-        }
-        self.status = "Requesting Probe Package Path"
+        payload =  Config.PROBE_TYPE[probe_type]
+        self.status = "Requesting probe package path."
         response = requests.post(url, headers=headers, data=json.dumps(payload), verify=False)
         if response.status_code == 200:
             response_data = response.json()
             path = response_data.get('path')
 
             if path:
-                self.log("Path retrieved successfully")
+                self.log("Path retrieved successfully.")
                 download_url = f"{base_url}/probe/download/{path}"
 
                 # To get content length
@@ -110,17 +98,14 @@ class DeployProbesThread(threading.Thread):
                                     total_mb = total_size / (1024 * 1024)
                                     self.status = f"Downloading Probe Package: {downloaded_mb:.2f}/{total_mb:.2f} MB ({progress:.2f}%)"
                             self.log("File downloaded successfully")
-                            self.status = "\nFile downloaded successfully."
                             return True
                     else:
                         msg = f"Failed to download file. Status code: {download_response.status_code}"
                         self.log(msg)
-                        self.status = msg
                         return False
         else:
             msg = f"Failed to get download path. Status code: {response.status_code}"
             self.log(msg)
-            self.status = msg
             return False
 
     def scp_file(self, local_path, remote_temp_path, ssh_host, ssh_port, ssh_username, ssh_password):
@@ -129,8 +114,7 @@ class DeployProbesThread(threading.Thread):
 
         try:
             ssh.connect(ssh_host, port=ssh_port, username=ssh_username, password=ssh_password)
-            self.log("SCP Started")
-            print("Now SCP the file to device")
+            self.log("SCP Started.")
 
             def progress(filename, size, sent):
                 if isinstance(filename, bytes):
@@ -160,13 +144,14 @@ class DeployProbesThread(threading.Thread):
         try:
             transport.auth_password(username=username, password=password)
         except paramiko.SSHException as err:
-            self.log(f"SSH Failed: {str(err)}")
+            self.log(f"SSH failed: {str(err)}")
             return False
 
         if not transport.is_authenticated():
-            self.log(f"SSH Authorization Failed")
+            self.log(f"SSH authorization failed.")
             return False
 
+        self.status = "Running commands to install Probe onto device."
         channel = transport.open_session()
         channel.get_pty(term='vt100', width=300, height=24)
         channel.invoke_shell()

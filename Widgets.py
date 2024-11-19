@@ -1,5 +1,4 @@
-from cProfile import label
-
+import Config
 import wx
 import threading
 from typing import Dict, List, Tuple
@@ -11,6 +10,7 @@ class Device:
         self.control_ip: str = control_ip
         self.username: str = ''
         self.password: str = ''
+        self.type: str = 'ubuntu'  # Set to ubuntu by default
         self.deploy = False      # Used to keep track of devices that have been configured or not.
 
     def __str__(self) -> str:
@@ -86,7 +86,7 @@ class DevicePopup(wx.Dialog):
         scrolled_panel = wx.ScrolledWindow(self, style=wx.VSCROLL | wx.HSCROLL)
         scrolled_panel.SetScrollRate(5, 5)
         bottom_grid = wx.GridBagSizer()
-        self.device_controls: Dict[Device, Tuple[wx.CheckBox, wx.TextCtrl, wx.TextCtrl]] = {}
+        self.device_controls: Dict[Device, Tuple[wx.CheckBox, wx.ComboBox, wx.TextCtrl, wx.TextCtrl]] = {}
 
         bottom_grid.Add(wx.StaticText(scrolled_panel, label="Deploy"), pos=(0, 0),
                         flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
@@ -94,9 +94,11 @@ class DevicePopup(wx.Dialog):
                         flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
         bottom_grid.Add(wx.StaticText(scrolled_panel, label="Control IP"), pos=(0, 2),
                         flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
-        bottom_grid.Add(wx.StaticText(scrolled_panel, label="Username"), pos=(0, 3),
+        bottom_grid.Add(wx.StaticText(scrolled_panel, label="Probe Type"), pos=(0, 3),
                         flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
-        bottom_grid.Add(wx.StaticText(scrolled_panel, label="Password"), pos=(0, 4),
+        bottom_grid.Add(wx.StaticText(scrolled_panel, label="Username"), pos=(0, 4),
+                        flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        bottom_grid.Add(wx.StaticText(scrolled_panel, label="Password"), pos=(0, 5),
                         flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
 
         for i, device in enumerate(devices):
@@ -105,6 +107,8 @@ class DevicePopup(wx.Dialog):
                 deploy_chk_bx.SetValue(True)
             alias_label: wx.StaticText = wx.StaticText(scrolled_panel, label=device.alias)
             control_ip_label: wx.StaticText = wx.StaticText(scrolled_panel, label=device.control_ip)
+            probe_type = wx.ComboBox(scrolled_panel, choices=list(Config.PROBE_TYPE.keys()), style=wx.CB_READONLY)
+            probe_type.SetStringSelection(device.type)
             username_text: wx.TextCtrl = wx.TextCtrl(scrolled_panel, size=(90, -1))
             username_text.SetValue(device.username)
             password_text: wx.TextCtrl = wx.TextCtrl(scrolled_panel, size=(90, -1))
@@ -113,9 +117,10 @@ class DevicePopup(wx.Dialog):
             bottom_grid.Add(deploy_chk_bx, pos=(i + 1, 0), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
             bottom_grid.Add(alias_label, pos=(i+1, 1), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
             bottom_grid.Add(control_ip_label, pos=(i+1, 2), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
-            bottom_grid.Add(username_text, pos=(i+1, 3), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
-            bottom_grid.Add(password_text, pos=(i+1, 4), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
-            self.device_controls[device] = (deploy_chk_bx, username_text, password_text)
+            bottom_grid.Add(probe_type, pos=(i+1, 3), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+            bottom_grid.Add(username_text, pos=(i+1, 4), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+            bottom_grid.Add(password_text, pos=(i+1, 5), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+            self.device_controls[device] = (deploy_chk_bx, probe_type, username_text, password_text)
 
         scrolled_panel.SetSizer(bottom_grid)
         scrolled_panel.FitInside()
@@ -139,10 +144,11 @@ class DevicePopup(wx.Dialog):
     def on_save(self, event: wx.Event) -> None:
         total = 0
         configured = 0
-        for device, (deploy_chk_bx, username_text, password_text) in self.device_controls.items():
+        for device, (deploy_chk_bx, probe_type, username_text, password_text) in self.device_controls.items():
             device.username = username_text.GetValue()
             device.password = password_text.GetValue()
             device.deploy = deploy_chk_bx.IsChecked()
+            device.type = probe_type.GetStringSelection()
             if device.deploy:
                 configured += 1
             total += 1

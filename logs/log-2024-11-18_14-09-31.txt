@@ -1,0 +1,24 @@
+-----------------------------
+Alais - Ubuntu Test Server 1  Control IP - 172.17.235.12
+Path retrieved successfully
+File downloaded successfully
+Probe Package Download Successful
+SCP Started
+Probe Package SCP successful to device
+Probe Deployed Successfully
+-----------------------------
+Alais - Ubuntu Test Server 2  Control IP - 172.17.235.3
+Path retrieved successfully
+File downloaded successfully
+Probe Package Download Successful
+SCP Started
+Probe Package SCP successful to device
+Probe Deployed Successfully
+-----------------------------
+Alais - Ubuntu Test Server 3  Control IP - 172.17.235.32
+Path retrieved successfully
+File downloaded successfully
+Probe Package Download Successful
+SCP Started
+Probe Package SCP successful to device
+Probe Deployed Successfully
