@@ -1,4 +1,4 @@
-import Config
+import config
 import wx
 import threading
 from typing import Dict, List, Tuple
@@ -10,8 +10,9 @@ class Device:
         self.control_ip: str = control_ip
         self.username: str = ''
         self.password: str = ''
-        self.type: str = 'ubuntu'  # Set to ubuntu by default
-        self.deploy = False      # Used to keep track of devices that have been configured or not.
+        self.probe_type: str = 'ubuntu'  # Set to ubuntu by default
+        self.file_type = 'tar'           # Set to tar by default
+        self.deploy = False              # Used to keep track of devices that have been configured or not.
 
     def __str__(self) -> str:
         return f"Device(alias={self.alias}, ip={self.control_ip}, username={self.username}, password={self.password})"
@@ -54,7 +55,7 @@ class DeviceListView(wx.Panel):
         DevicePopup(self, device_type, devices).ShowModal()
 
     def mark_configured(self, device_type: str, configured, total) -> None:
-        """Number is the number of devices configured in a given device type"""
+        """Number is the number of devices configured in a given device probe_type"""
         print(f'{device_type}  {configured} out of {total}')
         for index in range(self.device_list_ctrl.GetItemCount()):
             if self.device_list_ctrl.GetItemText(index) == device_type:
@@ -63,7 +64,7 @@ class DeviceListView(wx.Panel):
 
 class DevicePopup(wx.Dialog):
     def __init__(self, parent, device_type: str, devices: List[Device]) -> None:
-        super().__init__(parent, title=f"Devices for {device_type}", size=(600, 400))
+        super().__init__(parent, title=f"Devices for {device_type}", size=(700, 400))
         self.parent = parent
         self.device_type: str = device_type
         self.devices: List[Device] = devices
@@ -71,22 +72,28 @@ class DevicePopup(wx.Dialog):
         self.main_sizer: wx.BoxSizer = wx.BoxSizer(wx.VERTICAL)
 
         top_grid= wx.GridBagSizer()
-        self.username_label_all: wx.StaticText = wx.StaticText(self, label="Username (All):")
+        self.username_label_all: wx.StaticText = wx.StaticText(self, label="User:")
         self.username_text_all: wx.TextCtrl = wx.TextCtrl(self, size=(90, -1))
-        self.password_label_all: wx.StaticText = wx.StaticText(self, label="Password (All):")
+        self.password_label_all: wx.StaticText = wx.StaticText(self, label="Password:")
         self.password_text_all: wx.TextCtrl = wx.TextCtrl(self, size=(90, -1))
+        self.probe_type = wx.ComboBox(self, choices=config.PROBE_TYPES, style=wx.CB_READONLY)
+        self.probe_type.SetSelection(0)
+        self.file_type = wx.ComboBox(self, choices=config.FILE_TYPES, style=wx.CB_READONLY)
+        self.file_type.SetSelection(0)
         self.apply_all_button: wx.Button = wx.Button(self, label="Apply All")
-        top_grid.Add(self.username_label_all, pos=(0, 0), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
-        top_grid.Add(self.username_text_all, pos=(0, 1), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
-        top_grid.Add(self.password_label_all, pos=(0, 2), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
-        top_grid.Add(self.password_text_all, pos=(0, 3), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
-        top_grid.Add(self.apply_all_button, pos=(0, 4), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        top_grid.Add(self.probe_type, pos=(0, 0), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        top_grid.Add(self.file_type, pos=(0, 1), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        top_grid.Add(self.username_label_all, pos=(0, 2), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        top_grid.Add(self.username_text_all, pos=(0, 3), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        top_grid.Add(self.password_label_all, pos=(0, 4), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        top_grid.Add(self.password_text_all, pos=(0, 5), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        top_grid.Add(self.apply_all_button, pos=(0, 6), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
 
         # Create a scrolled panel for the bottom grid
         scrolled_panel = wx.ScrolledWindow(self, style=wx.VSCROLL | wx.HSCROLL)
         scrolled_panel.SetScrollRate(5, 5)
         bottom_grid = wx.GridBagSizer()
-        self.device_controls: Dict[Device, Tuple[wx.CheckBox, wx.ComboBox, wx.TextCtrl, wx.TextCtrl]] = {}
+        self.device_controls: Dict[Device, Tuple[wx.CheckBox, wx.ComboBox, wx.ComboBox, wx.TextCtrl, wx.TextCtrl]] = {}
 
         bottom_grid.Add(wx.StaticText(scrolled_panel, label="Deploy"), pos=(0, 0),
                         flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
@@ -96,9 +103,11 @@ class DevicePopup(wx.Dialog):
                         flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
         bottom_grid.Add(wx.StaticText(scrolled_panel, label="Probe Type"), pos=(0, 3),
                         flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
-        bottom_grid.Add(wx.StaticText(scrolled_panel, label="Username"), pos=(0, 4),
+        bottom_grid.Add(wx.StaticText(scrolled_panel, label="File Type"), pos=(0, 4),
                         flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
-        bottom_grid.Add(wx.StaticText(scrolled_panel, label="Password"), pos=(0, 5),
+        bottom_grid.Add(wx.StaticText(scrolled_panel, label="Username"), pos=(0, 5),
+                        flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+        bottom_grid.Add(wx.StaticText(scrolled_panel, label="Password"), pos=(0, 6),
                         flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
 
         for i, device in enumerate(devices):
@@ -107,8 +116,10 @@ class DevicePopup(wx.Dialog):
                 deploy_chk_bx.SetValue(True)
             alias_label: wx.StaticText = wx.StaticText(scrolled_panel, label=device.alias)
             control_ip_label: wx.StaticText = wx.StaticText(scrolled_panel, label=device.control_ip)
-            probe_type = wx.ComboBox(scrolled_panel, choices=list(Config.PROBE_TYPE.keys()), style=wx.CB_READONLY)
-            probe_type.SetStringSelection(device.type)
+            probe_type = wx.ComboBox(scrolled_panel, choices=config.PROBE_TYPES, style=wx.CB_READONLY)
+            probe_type.SetStringSelection(device.probe_type)
+            file_type = wx.ComboBox(scrolled_panel, choices=config.FILE_TYPES, style=wx.CB_READONLY)
+            file_type.SetStringSelection(device.file_type)
             username_text: wx.TextCtrl = wx.TextCtrl(scrolled_panel, size=(90, -1))
             username_text.SetValue(device.username)
             password_text: wx.TextCtrl = wx.TextCtrl(scrolled_panel, size=(90, -1))
@@ -118,9 +129,10 @@ class DevicePopup(wx.Dialog):
             bottom_grid.Add(alias_label, pos=(i+1, 1), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
             bottom_grid.Add(control_ip_label, pos=(i+1, 2), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
             bottom_grid.Add(probe_type, pos=(i+1, 3), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
-            bottom_grid.Add(username_text, pos=(i+1, 4), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
-            bottom_grid.Add(password_text, pos=(i+1, 5), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
-            self.device_controls[device] = (deploy_chk_bx, probe_type, username_text, password_text)
+            bottom_grid.Add(file_type, pos=(i + 1, 4), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+            bottom_grid.Add(username_text, pos=(i+1, 5), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+            bottom_grid.Add(password_text, pos=(i+1, 6), flag=wx.ALL | wx.ALIGN_CENTER_VERTICAL, border=5)
+            self.device_controls[device] = (deploy_chk_bx, probe_type, file_type, username_text, password_text)
 
         scrolled_panel.SetSizer(bottom_grid)
         scrolled_panel.FitInside()
@@ -144,11 +156,12 @@ class DevicePopup(wx.Dialog):
     def on_save(self, event: wx.Event) -> None:
         total = 0
         configured = 0
-        for device, (deploy_chk_bx, probe_type, username_text, password_text) in self.device_controls.items():
+        for device, (deploy_chk_bx, probe_type, file_type, username_text, password_text) in self.device_controls.items():
             device.username = username_text.GetValue()
             device.password = password_text.GetValue()
             device.deploy = deploy_chk_bx.IsChecked()
-            device.type = probe_type.GetStringSelection()
+            device.file_type = file_type.GetStringSelection()
+            device.probe_type = probe_type.GetStringSelection()
             if device.deploy:
                 configured += 1
             total += 1
@@ -159,9 +172,13 @@ class DevicePopup(wx.Dialog):
         self.Close()
 
     def on_apply_all(self, event: wx.Event) -> None:
+        probe_type = self.probe_type.GetStringSelection()
+        file_type = self.file_type.GetStringSelection()
         username: str = self.username_text_all.GetValue()
         password: str = self.password_text_all.GetValue()
-        for device, (deploy_chk_bx, username_text, password_text) in self.device_controls.items():
+        for device, (deploy_chk_bx, probe_type_bx, file_type_bx, username_text, password_text) in self.device_controls.items():
             deploy_chk_bx.SetValue(True)
+            probe_type_bx.SetStringSelection(probe_type)
+            file_type_bx.SetStringSelection(file_type)
             username_text.SetValue(username)
             password_text.SetValue(password)

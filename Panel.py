@@ -6,14 +6,14 @@ import Widgets
 import Threads
 import utils
 import requests
-import Config
+import config
 
 class Panel(wx.Panel):
     def __init__(self, parent) -> None:
         wx.Panel.__init__(self, parent)
         self.parent= parent
 
-        self.fetch_insite = ""      # Stores the IP of fetched Insite IP
+        self.fetched_insite_ip = ""      # Stores the IP of fetched Insite IP
         self.device_types: Dict[str, List[Widgets.Device]] = {}
         self.deploy_thread = None
 
@@ -76,7 +76,6 @@ class Panel(wx.Panel):
         edit_thread.start()
 
     def on_deploy(self, event: wx.Event) -> None:
-
         if self.deploy_thread is not None:
             self.error_alert("Probes are already being deployed.")
             return
@@ -87,19 +86,24 @@ class Panel(wx.Panel):
 
         total = 0
         configured = 0
-        for device_key, device_list in self.device_types.items():
+        devices = []
+        for _, device_list in self.device_types.items():
             for device in device_list:
                 if device.deploy:
+                    devices.append(device)
                     configured += 1
                 total += 1
+
         if configured == 0:
             self.error_alert("No devices have been configured for deployment.")
             return
         if configured < total:
             if not self.informational_alert(f"{configured} out of {total} devices have been configured. Do you want to continue?"):
                 return
-        self.deploy_thread = Threads.DeployProbesThread(self.fetch_insite, self.device_types)
+
+        self.deploy_thread = Threads.DeployProbesThread(devices, self.fetched_insite_ip)
         self.deploy_thread.total_devices = configured
+        self.list.Disable()
         self.timer.Start(300)
 
     def on_fetch(self, event: wx.Event) -> None:
@@ -107,15 +111,15 @@ class Panel(wx.Panel):
         threading.Thread(target=self._fetch_data).start()
 
     def _fetch_data(self) -> None:
-        # ip: str = self.insite_ip.GetValue()
-        # user: str = self.user_input.GetValue()
-        # password: str = self.pass_input.GetValue()
-        #
-        # if not utils.is_valid_ip(ip):
-        #     wx.CallAfter(self.error_alert, "Magnum Analytics IP is not valid.")
-        #     return
-        #
-        # self.fetch_insite = ip
+        ip: str = self.insite_ip.GetValue()
+        user: str = self.user_input.GetValue()
+        password: str = self.pass_input.GetValue()
+
+        if not utils.is_valid_ip(ip):
+            wx.CallAfter(self.error_alert, "Magnum Analytics IP is not valid.")
+            return
+
+        self.fetched_insite_ip = ip
         #
         # login_url: str = f"https://{ip}:50443/api/-/login"
         # login_payload: dict = {
@@ -148,12 +152,12 @@ class Panel(wx.Panel):
         #             else:
         #                 self.device_types[device_type].append(Widgets.Device(alias, control_ip))
 
-         self.device_types = {"Test Device Type 1": [Widgets.Device("Ubuntu Test Server 1 ", "172.17.235.12"),
+        self.device_types = {"Test Device Type 1": [Widgets.Device("Ubuntu Test Server 1 ", "172.17.235.12"),
                                                    Widgets.Device("Ubuntu Test Server 2 ", "172.17.235.3"),
                                                    Widgets.Device("Ubuntu Test Server 3 ", "172.17.235.32")],
                               "Test Device Type 2": [Widgets.Device("Cent OS Test Server", "172.17.235.89"),
                                                    Widgets.Device("Debian Test Server 2 ", "172.17.235.34"),]}
-         wx.CallAfter(self.list.add_devices, self.device_types)
+        wx.CallAfter(self.list.add_devices, self.device_types)
         # except requests.RequestException as e:
         #     # Handle any connection errors
         #     wx.CallAfter(self.error_alert, f"Failed to connect: {str(e)}")
@@ -163,9 +167,9 @@ class Panel(wx.Panel):
 
     def OnTimer(self, event: wx.Event) -> None:
         """Called periodically while the flooder threads are running."""
-        self.set_status_text(self.deploy_thread.status, 0)
-        self.set_status_text(f"Deploying on {self.deploy_thread.current_device}", 1)
-        self.set_status_text(f"Completed {self.deploy_thread.completed_device}/{self.deploy_thread.total_devices}", 2)
+        self.set_status_text(self.deploy_thread.status1, 0)
+        self.set_status_text(self.deploy_thread.status2, 1)
+        self.set_status_text(self.deploy_thread.status3, 2)
         if self.deploy_thread.end_event.is_set():
             successful = self.deploy_thread.successful_devices
             total = self.deploy_thread.total_devices

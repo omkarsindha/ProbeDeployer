@@ -65,7 +65,7 @@ def scp_file(local_path, remote_temp_path, ssh_host, ssh_port, ssh_username, ssh
     finally:
         ssh.close()
 
-def ssh_and_run_commands(host, port, username, password, remote_temp_path, remote_final_path):
+def ssh_and_run_commands(host, port, username, password):
     try:
         transport = paramiko.Transport((host, port))
         transport.start_client()
@@ -165,8 +165,8 @@ payload = {
         "metricbeat": True
     }
 }
-local_path = "probe_package.tar"
-download_file(base_url, payload, local_path)
+local_path = "probe_files/centos.tar"
+#download_file(base_url, payload, local_path)
 
 host = '172.17.235.12'
 port = 22
@@ -176,6 +176,6 @@ remote_temp_path = '/home/evertz/probe_package.tar'
 scp_file(local_path, remote_temp_path, host, port, username, password)
 
 remote_final_path = '/opt/evertz/insite/probe/probe_package.tar'
-ssh_and_run_commands(host, port, username, password, remote_temp_path, remote_final_path)
+#ssh_and_run_commands(host, port, username, password, remote_temp_path, remote_final_path)
 
-os.remove(local_path)
+#os.remove(local_path)

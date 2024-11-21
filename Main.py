@@ -36,7 +36,7 @@ class MainFrame(wx.Frame):
             "Running on %s\n\n" % (wx.GetOsDescription()) +
             "Process ID = %s\n" % (os.getpid()))
         info.SetWebSite("www.evertz.com", "Evertz")
-        info.AddDeveloper("Omkarsinh Sindha and Cengiz Beytaz")
+        info.AddDeveloper("Omkarsinh Sindha")
         wx.adv.AboutBox(info)
 # End class MainFrame(wx.Frame)
 

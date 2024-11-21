@@ -17,7 +17,6 @@ def is_valid_ip(ip_str):
         return True
     return False
 
-
 def to_string(input, encoding='utf-8', errors='replace'):
     """Convert Packet Payload from Bytes to String """
     if isinstance(input, str):
@@ -38,7 +37,6 @@ def is_positive_number(num):
 
 def is_multicast(ip):
     try:
-        # Convert IP address to 32-bit integer
         parts = [int(part) for part in ip.split('.')]
         if len(parts) != 4 or not all(0 <= p <= 255 for p in parts):
             return False
