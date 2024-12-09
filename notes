@@ -1,22 +1,54 @@
 To delete a probe from device completely:
 
-Go to setup folder in the probe package and run ./install and uninstall it from the options.
-Go to /opt and "sudo rm -rf evertz".\
-sudo rm -rf /bin/insite-probe (check if this is needed)
+Go to /opt and "sudo rm -rf evertz"
 sudo rm /lib/systemd/system/insite-probe.service
+sudo reboot
+
+To change IP
+list all interface - ip addr show
+open file and write the below (sudo vi /etc/sysconfig/network-scripts/ifcfg-<interface>)
+        DEVICE=<interface >
+        BOOTPROTO=static
+        IPADDR=192.168.1.100
+        NETMASK=255.255.255.0
+        GATEWAY=192.168.1.1
+sudo systemctl restart network
 
 
 
 
+172.17.147.173
 test servers
-172.17.223.12
-172.17.223.3
-172.17.223.32
+172.17.235.12 ubuntu
+172.17.235.3  ubuntu
+172.17.235.89   Centos    /usr/lib for probe service
+172.17.235.32  Fedora           (cgi.py module not found error)
+172.17.235.34   Opensuse        You have temp gateway so wont ssh after reboot set gateway in opensuse       /usr/lib for probe service
+172.17.235.40   Debian
+
 
 Centos -  Tar(done) deb(N/A)
-Ubuntu -  Tar(done) deb()
-Debian -  Tar(done) deb()
+Ubuntu -  Tar(done) deb(done)
+Debian -  Tar(done) deb(done)
 Fedora - Tar(done)  deb(N/A)
 opensuse - Tar(done)  deb(N/A)
 suse - Tar(done) deb(N/A)
+
+
+
+Sensors in the lab
+28-00000d3c2aa3   pin 16   other side     Sandbox NO8 98ft
+28-00000d3c627d   pin 23   other side     Sandbox NO1 80ft
+28-00000d3d1791   pin 12  other side      Sandbox S08 108ft
+28-00000d3da365   pin 25  ethernet side   PE North 64ft
+28-00000d3dbe7c   pin 22  ethernet side   PE South 28ft
+28-00000d3de8fd   pin 19   other side     Sandbox N12 110fr
+28-00000d796f6d   pin 26  ethernet side   Sandbox S12 120FT
+28-00000d7a31d8   pin 24  other side      Sandbox S01 92ft
+
+
+28-00000d3daa36  ? ? ?
+? ? Sandbox N20 123FT
+? ? Sandbox S20 133FT
+
 

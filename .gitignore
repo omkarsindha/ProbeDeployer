@@ -1,3 +1,8 @@
 logs
 __pycache__
 probe_files
+.idea
+todo
+script.py
+config.py
+notes

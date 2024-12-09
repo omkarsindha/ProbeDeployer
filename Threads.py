@@ -1,340 +1,560 @@
+import random
 import threading
-from typing import List
-from Widgets import Device
 import os
 import requests
 import json
 import paramiko
-from scp import SCPClient
 import time
+import urllib3
 
 FILE_DIR = "probe_files"
 LOG_DIR = "logs"
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class DeployProbesThread(threading.Thread):
-    def __init__(self, devices: List[Device], insite_ip):
-        super().__init__()
-        self.devices = devices
-        self.probe_files = []
+	def __init__(self, devices, insite_ip, download_batch, sftp_batch):
+		super().__init__()
+		self.devices = devices
+		self.insite_ip = insite_ip
 
-        self.insite_ip = insite_ip
+		seen_pairs = {}
+		self.download_jobs = []
+		self.sftp_jobs = []
+		self.ssh_jobs = []
+		for device in devices:
+			self.sftp_jobs.append(Job(device))
+			self.ssh_jobs.append(Job(device))
 
-        self.download_thread = DownloadManager(self.devices, insite_ip)
-        self.scp_thread = SCPManager(self.devices)
-        #self.ssh_thread = SSHThread(self.devices)
+			pair = (device.probe_type, device.file_type)
+			if pair not in seen_pairs:
+				seen_pairs[pair] = ""
+				self.download_jobs.append(Job(device))
 
-        self.total_devices = 0
-        self.successful_devices = 0
-        self.completed_device = 0
-        self.current_device = ""
-        self.status1 = ""
-        self.status2 = ""
-        self.status3 = ""
-        self.log_file = open(f"logs/log-{time.strftime('%Y-%m-%d__%H-%M-%S')}.txt", "w")
+		self.download_manager = DownloadManager(self.download_jobs, insite_ip, download_batch, self)
+		self.sftp_manager = SftpManager(self.sftp_jobs, sftp_batch, self)
+		self.ssh_manager = SSHManager(self.ssh_jobs)
+		self.end_event = threading.Event()
 
-        self.end_event = threading.Event()
-        self.start()
+	def handle_download_error(self, probe_type, file_type):
+		for job in self.sftp_jobs:
+			if job.device.probe_type == probe_type and job.device.file_type == file_type:
+				job.add_log("Probe package download failed, cannot transfer.")
+				job.error = True
 
+		for job in self.ssh_jobs:
+			if job.device.probe_type == probe_type and job.device.file_type == file_type:
+				job.add_log("Probe package download failed.")
+				job.error = True
 
-    def run(self):
-        # Delete the local file
-        #self.delete_probe_files()
-        self.end_event.set()
-        self.log_file.close()
+	def handle_sftp_error(self, device):
+		for job in self.ssh_jobs:
+			if job.device is device:
+				job.error = True
+				job.add_log("Probe package transfer failed.")
 
-    def log(self, message, status=True):
-        self.log_file.write(f"{message}\n")
-        self.log_file.flush()
-        print(message)
-        if status:
-            self.status1 = message
+	def run(self):
+		self.download_manager.start()
+		while self.download_manager.is_alive():
+			if self.end_event.is_set():
+				self.download_manager.stop(block=True)
+				return
+			time.sleep(1)
 
-    def delete_probe_files(self):
-        if os.path.exists(FILE_DIR):
-            self.status1 = "Deleting locally downloaded probe files."
-            os.remove(FILE_DIR)
+		self.sftp_manager.start()
+		while self.sftp_manager.is_alive():
+			if self.end_event.is_set():
+				self.sftp_manager.end_event.set()
+				return
+			time.sleep(1)
 
-class ProbeFile:
-    def __init__(self, probe_type, file_type):
-        self.probe_type = probe_type
-        self.file_type = file_type
-        self.error = False
-        self.completed = False
-        self.is_downloading = False
-        self.progress = 0
-        self.log = []
+		self.ssh_manager.start()
+		while self.ssh_manager.is_alive():
+			if self.end_event.is_set():
+				self.ssh_manager.end_event.set()
+				return
+			time.sleep(1)
 
-class DownloadManager(threading.Thread):
-    def __init__(self, devices, insite_ip, batch_size=3):
-        super().__init__()
-        self.devices = devices
-        self.insite_ip = insite_ip
-        self.probe_files = []
-        self.batch_size = batch_size
-        self.active_threads = []
-        self.thread_lock = threading.Lock()
-        seen_pairs = {}
-        for device in self.devices:
-            pair = (device.probe_type, device.file_type)
-            if pair not in seen_pairs:
-                seen_pairs[pair] = "_"
-                self.probe_files.append(ProbeFile(device.probe_type, device.file_type))
+		self.log_data()
+		self.delete_files()
+		self.end_event.set()
 
-    def run(self):
-        if not os.path.exists(FILE_DIR):
-            os.makedirs(FILE_DIR)
+	def log_data(self):
+		if not os.path.exists("logs"):
+			os.makedirs("logs")
+		filename = time.strftime("%m-%d__%H-%M")
+		with open(f"logs/log--{filename}.log", "w") as file:
+			file.write("Download tasks\n")
+			for job in self.download_jobs:
+				file.write("----------------------------------\n")
+				file.write(f"File: {job.device.probe_type}.{job.device.file_type}\n")
+				for log in job.logs:
+					file.write(log + "\n")
+			file.write("\n\nSftp tasks\n")
+			for job in self.sftp_jobs:
+				file.write("-------------------------------------------------\n")
+				file.write(f"Alias: {job.device.alias}    Control IP: {job.device.control_ip}\n")
+				for log in job.logs:
+					file.write(log + "\n")
+			file.write("\n\nSSH Commands\n")
+			for job in self.ssh_jobs:
+				file.write("-------------------------------------------------\n")
+				file.write(f"Alias: {job.device.alias}    Control IP: {job.device.control_ip}\n")
+				for log in job.logs:
+					file.write(log + "\n")
 
-        for probe_file in self.probe_files:
-            # Start threads if batch size is not exceeded
-            with self.thread_lock:
-                while len(self.active_threads) == self.batch_size:
-                    # Clean up completed threads
-                    self.active_threads = [t for t in self.active_threads if t.is_alive()]
-                    threading.Event().wait(1)  # Small delay to prevent busy waiting
+	@staticmethod
+	def delete_files():
+		if not os.path.exists(FILE_DIR):
+			return
 
-                probe_type, file_type = probe_file.probe_type, probe_file.file_type
-                thread = SingleDownloadThread(self.insite_ip, probe_type, file_type, self)
-                thread.start()
-                self.active_threads.append(thread)
+		for filename in os.listdir(FILE_DIR):
+			file_path = os.path.join(FILE_DIR, filename)
+			try:
+				if os.path.isfile(file_path):
+					os.remove(file_path)
+			except Exception as e:
+				print(f"Failed to delete {file_path}. Reason: {e}")
 
-        while self.active_threads:
-            self.active_threads = [t for t in self.active_threads if t.is_alive()]
-            threading.Event().wait(1) # Small delay to prevent busy waiting
-
-        print("All downloads completed.")
-
-
-class SingleDownloadThread(threading.Thread):
-    def __init__(self, insite_ip, probe_file:ProbeFile, manager, retries = 3):
-        super().__init__()
-        self.end_event = threading.Event()
-        self.insite_ip = insite_ip
-        self.probe_file = probe_file
-        self.status = ""
-        self.manager = manager
-        self.retries = retries
-
-    def log(self, msg):
-        self.probe_file.log.append(msg)
-        print(msg)
-
-    def run(self):
-        self.probe_file.is_downloading = True
-        for attempt in range(self.retries):
-            try:
-                url = f"https://{self.insite_ip}/api/-/model/probes?static-asset=true"
-                headers = {"Content-Type": "application/json"}
-                payload = {
-                    "type": self.probe_file.probe_type,
-                    "os": {"family": "linux", "architecture": "amd64"},
-                    "bits": 64,
-                    "archive-type": self.probe_file.file_type,
-                    "port": 22222,
-                    "beats": {"filebeat": True, "metricbeat": True},
-                }
-
-                response = requests.post(url, headers=headers, data=json.dumps(payload), verify=False)
-                if response.status_code == 200:
-                    path = response.json().get("path")
-
-                    if path:
-                        download_url = f"https://{self.insite_ip}/probe/download/{path}"
-
-                        response = requests.head(download_url, verify=False) # Get content length
-                        total_size = int(response.headers.get("content-length", 0))
-
-                        with requests.get(download_url, stream=True, verify=False) as download_response:
-                            if download_response.status_code == 200:
-                                file_path = f"{FILE_DIR}/{self.probe_file.probe_type}.{self.probe_file.file_type.lower()}"
-                                with open(file_path, "wb") as file:
-                                    downloaded_size = 0
-                                    for chunk in download_response.iter_content(chunk_size=1024):
-                                        if chunk:
-                                            file.write(chunk)
-                                            downloaded_size += len(chunk)
-                                            progress = (downloaded_size / total_size) * 100
-                                            self.probe_file.progress = progress
-                                            print(f"Progress: {progress:.2f}%")
-
-                                self.log(f"Attempt: {attempt}. File downloaded successfully")
-                                self.probe_file.is_downloading = False
-                                self.probe_file.completed = True
-                                return  # Exit after successful download
-                            else:
-                                self.log(f"Attempt: {attempt}. Failed to download file. Attempt: {attempt}. Status code: {download_response.status_code}")
-                else:
-                    self.log(f"Attempt: {attempt}. Failed to get download path. Status code: {response.status_code}")
-
-            except Exception as e:
-                self.log(f"Attempt: {attempt}.  Error in downloading {self.probe_file.probe_type}.{self.probe_file.file_type}: {e}")
-
-        # Retries exhausted
-        self.log(f"Failed after {self.retries} retries")
-        self.probe_file.error = True
-
-class SCPManager(threading.Thread):
-    def __init__(self, devices, batch_size=3):
-        super().__init__()
-        self.devices = devices
-        self.probe_files = []
-        self.batch_size = batch_size
-        self.active_threads = []
-        self.thread_lock = threading.Lock()
-
-    def run(self):
-        for device in self.devices:
-            # Start threads if batch size is not exceeded
-            with self.thread_lock:
-                while len(self.active_threads) == self.batch_size:
-                    # Clean up completed threads
-                    self.active_threads = [t for t in self.active_threads if t.is_alive()]
-                    threading.Event().wait(1)  # Small delay to prevent busy waiting
-
-                thread = SingleSCPThread(device, self)
-                thread.start()
-                self.active_threads.append(thread)
-
-        while self.active_threads:
-            self.active_threads = [t for t in self.active_threads if t.is_alive()]
-            threading.Event().wait(1) # Small delay to prevent busy waiting
-
-        print("All downloads completed.")
-
-class SingleSCPThread(threading.Thread):
-    def __init__(self, device, manager):
-        super().__init__()
-        self.device = device
-        self.manager = manager
-
-    def run(self):
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        try:
-            ssh.connect(self.device.control_ip, port=22, username=self.device.username, password=self.device.password)
-            self.log("SCP Started.")
-
-            def progress(filename, size, sent):
-                if isinstance(filename, bytes):
-                    filename = filename.decode('utf-8')
-                sent_mb = sent / (1024 * 1024)
-                size_mb = size / (1024 * 1024)
-                progress_percentage = (sent / size) * 100
-                self.status1 = f"Transferring {filename} to device: {sent_mb:.2f}/{size_mb:.2f} MB ({progress_percentage:.2f}%)"
-
-            with SCPClient(ssh.get_transport(), progress=progress) as scp:
-                file = f"{self.device.probe_type}.{self.device.file_type.lower()}"
-                file_path = f"{FILE_DIR}/{file}"
-                remote_path = f"/home/{self.device.username}/{file}"
-                print(file_path)
-                print(remote_path)
-                scp.put(file_path, remote_path)
-                self.log("Probe package SCP to device successful")
-            return True
-        except Exception as e:
-            self.log(f"SCP failed: {str(e)}")
-            return False
-        finally:
-            ssh.close()
+	def stop(self, block=False):
+		"""Signal the thread to stop and optionally block until exited."""
+		self.end_event.set()
+		if self.download_manager.is_alive():
+			self.download_manager.stop(block)
+		if self.sftp_manager.is_alive():
+			self.sftp_manager.stop(block)
+		if self.ssh_manager.is_alive():
+			self.ssh_manager.stop(block)
+		if block is True:
+			self.join()
 
 
-# class SSHThread(threading.Thread):
-#     def __init__(self, devices):
-#         super().__init__()
-#         self.devices = devices
-#         pass
-#
-#     def run(self):
-#         try:
-#             transport = paramiko.Transport((device.control_ip, 22))
-#             transport.start_client()
-#         except paramiko.SSHException as err:
-#             self.log(f"SSH Failed: {str(err)}")
-#             return False
-#         try:
-#             transport.auth_password(username=device.username, password=device.password)
-#         except paramiko.SSHException as err:
-#             self.log(f"SSH failed: {str(err)}")
-#             return False
-#
-#         if not transport.is_authenticated():
-#             self.log(f"SSH authorization failed.")
-#             return False
-#
-#         self.status1 = "Running commands to install Probe onto device."
-#         channel = transport.open_session()
-#         channel.get_pty(term='vt100', width=300, height=24)
-#         channel.invoke_shell()
-#
-#         def read_until(channel, expected, timeout=None):
-#             """Read the given channel until the expected text shows up or the timeout
-#                (in seconds) expires. If timeout is None, it will wait forever. If
-#                expected is None it will simply read for the given timeout."""
-#             start = time.time()
-#             reply = bytearray()
-#             while channel.recv_ready() or channel.exit_status_ready() is False:
-#                 if channel.recv_ready():
-#                     reply.extend(channel.recv(8192))
-#                     # Is our expected response in the reply?
-#                     pos = reply.find(expected) if expected else -1
-#                     if pos > -1:
-#                         break
-#                 else:
-#                     time.sleep(0.1)
-#                 elapsed = abs(time.time() - start)
-#                 if timeout and elapsed > timeout:
-#                     break
-#             return reply.decode('utf-8')
-#
-#         channel.send('sudo -s\n')
-#         read_until(channel, b'[sudo] password for', 5)
-#
-#         channel.send(device.password + '\n')
-#         read_until(channel, b'#', 5)
-#
-#         file = f"{device.probe_type}.{device.file_type.lower()}"
-#         # Now you are in a root shell, you can run commands as root
-#         if device.file_type == "TAR":
-#             commands = [
-#                 'mkdir -p /opt/evertz/insite/probe',
-#                 f'mv /home/{device.username}/{file} /opt/evertz/insite/probe/{file}',
-#                 'cd /opt/evertz/insite/probe',
-#                 f'sudo tar -xvf {file}',
-#                 'cd /opt/evertz/insite/probe/insite-probe/setup',
-#                 'chmod +x ./install',
-#                 'rm -f user_consent.json',  # So that the script asks for consent even if Consent has already been given
-#                 'rm -rf /bin/insite-probe',
-#                 'echo -e "1\nyes" | ./install'
-#             ]
-#         else:
-#             commands = [
-#                 f'sudo dpkg -i {file}',
-#             ]
-#
-#         for command in commands:
-#             channel.send(command + '\n')
-#             out = read_until(channel, b'#', 5)
-#             print(f"Command: {command}")
-#             print(f"Output: {out}")
-#             time.sleep(0.5)
-#
-#         if device.probe_type == "centos" or device.probe_type == "fedora":
-#             systemctl = "/bin/systemctl"
-#         else:
-#             systemctl = "systemctl"
-#         # Check the status of the insite-probe service
-#         channel.send(f'{systemctl} status insite-probe\n')
-#         output = read_until(channel, b'#', 5)
-#         print(output)
-#
-#         if 'active (running)' not in output:
-#             channel.send(f'{systemctl} start insite-probe\n')
-#             output = read_until(channel, b'#', 5)
-#             print(output)
-#
-#             time.sleep(0.5)
-#             channel.send(f'{systemctl} status insite-probe\n')
-#             output = read_until(channel, b'#', 5)
-#             print(output)
-#
-#         transport.close()
-#         return True
+class Job:
+	def __init__(self, device):
+		self.device = device
+		self.error = False
+		self.completed = False
+		self.in_progress = False
+		self.final_update_done = False  # Used by GUI to track the animation
+		self.size = 0
+		self.done = 0  # Store the downloaded/transferred portion
+		self.progress = 0  # Percentage of completed job
+		self.speed = 0
+		self.logs = []
+		self.lock = threading.Lock()
+
+	def get_logs(self):
+		with self.lock:
+			return self.logs[:]
+
+	def add_log(self, message):
+		with self.lock:
+			self.logs.append(message)
+
+
+class BaseManager(threading.Thread):
+	def __init__(self, jobs, batch_size, parent):
+		super().__init__()
+		self.jobs = jobs
+		self.batch_size = batch_size
+		self.parent = parent
+		self.active_threads = []
+		self.thread_lock = threading.Lock()
+		self.end_event = threading.Event()
+
+	def run(self):
+		for job in self.jobs:
+			with self.thread_lock:
+				while len(self.active_threads) == self.batch_size:
+					self.active_threads = [t for t in self.active_threads if t.is_alive()]
+					threading.Event().wait(1)
+
+				if self.end_event.is_set():
+					return
+
+				thread = self.create_worker(job)
+				thread.start()
+				self.active_threads.append(thread)
+
+		while self.active_threads:
+			self.active_threads = [t for t in self.active_threads if t.is_alive()]
+			threading.Event().wait(1)
+
+	def stop(self, block=False):
+		self.end_event.set()
+		for thread in self.active_threads:
+			thread.stop()
+
+		if block is True:
+			self.join()
+
+	def create_worker(self, job):
+		raise NotImplementedError("Subclasses should implement this method")
+
+
+class DownloadManager(BaseManager):
+	def __init__(self, download_jobs, insite_ip, batch_size, parent):
+		super().__init__(download_jobs, batch_size, parent)
+		self.insite_ip = insite_ip
+		if not os.path.exists(FILE_DIR):
+			os.makedirs(FILE_DIR)
+
+	def create_worker(self, job):
+		return DownloadWorker(self.insite_ip, job, self)
+
+	def handle_download_error(self, probe_type, file_type):
+		self.parent.handle_download_error(probe_type, file_type)
+
+
+class DownloadWorker(threading.Thread):
+	def __init__(self, insite_ip, job: Job, manager: DownloadManager, retries=3):
+		super().__init__()
+		self.insite_ip = insite_ip
+		self.job = job
+		self.manager = manager
+		self.retries = retries
+		self.end_event = threading.Event()
+
+	def log(self, msg):
+		self.job.add_log(msg)
+
+	def run(self):
+		self.job.in_progress = True
+		file = f"{self.job.device.probe_type}.{self.job.device.file_type.lower()}"
+		self.log("Starting download")
+		for attempt in range(1, self.retries + 1):
+			try:
+				url = f"https://{self.insite_ip}/api/-/model/probes?static-asset=true"
+				headers = {"Content-Type": "application/json"}
+				payload = {
+					"type": self.job.device.probe_type,
+					"os": {"family": "linux", "architecture": "amd64"},
+					"bits": 64,
+					"archive-type": self.job.device.file_type,
+					"port": 22222,
+					"beats": {"filebeat": True, "metricbeat": True},
+				}
+				self.log(f"Attempt {attempt}: Requesting probe File Path")
+				response = requests.post(url, headers=headers, data=json.dumps(payload), verify=False)
+				self.log(f"Attempt {attempt}: Response status code: {response.status_code}")
+				if response.status_code == 200:
+					path = response.json().get("path")
+					self.log(f"Attempt {attempt}: Path retrieved: {path}")
+
+					if path:
+						download_url = f"https://{self.insite_ip}/probe/download/{path}"
+						self.log(f"Attempt {attempt}: Requesting file size from {download_url}")
+						response = requests.head(download_url, verify=False)  # Get content length
+						total_size = int(response.headers.get("content-length", 0))
+						self.job.size = total_size / (1024 * 1024)
+						self.log(f"Attempt {attempt}: Total file size: {self.job.size} MB")
+						self.log(f"Attempt {attempt}: Downloading file...")
+						with requests.get(download_url, stream=True, verify=False) as download_response:
+							self.log(
+								f"Attempt {attempt}: Download response status code: {download_response.status_code}")
+							if download_response.status_code == 200:
+								file_path = f"{FILE_DIR}/{file}"
+								with open(file_path, "wb") as file:
+									downloaded_size = 0
+									start_time = time.time()
+									for chunk in download_response.iter_content(chunk_size=1024):
+										if chunk:
+											file.write(chunk)
+											downloaded_size += len(chunk)
+											progress = (downloaded_size / total_size) * 100
+											self.job.progress = progress
+
+											elapsed_time = time.time() - start_time
+											if elapsed_time > 0:
+												speed = downloaded_size / elapsed_time  # bytes per second
+												self.job.speed = speed / (1024 * 1024)  # MB/s
+
+											if self.end_event.is_set():
+												return
+
+								self.log(f"Attempt {attempt}: File downloaded successfully")
+								self.job.in_progress = False
+								self.job.completed = True
+								self.job.progress = 100
+								return  # Exit after successful download
+							else:
+								self.log(
+									f"Attempt {attempt}: Failed to download file. Status code: {download_response.status_code}")
+				else:
+					self.log(f"Attempt {attempt}: Failed to get download path. Status code: {response.status_code}")
+
+			except Exception as e:
+				self.log(f"Attempt {attempt}: Error in downloading {file}: {e}")
+
+		# Retries exhausted
+		self.log(f"Failed after {self.retries} retries")
+		self.error()
+		self.manager.handle_download_error(self.job.device.probe_type, self.job.device.file_type)
+
+	def error(self):
+		self.job.error = True
+		self.job.progress = 100
+		self.job.in_progress = False
+		self.job.completed = False
+
+	def stop(self, block=False):
+		"""Signal the thread to stop and optionally block until exited."""
+		self.end_event.set()
+		if block is True:
+			self.join()
+
+
+class SftpManager(BaseManager):
+	def create_worker(self, job):
+		return SftpWorker(job, self)
+
+	def handle_sftp_error(self, device):
+		self.parent.handle_sftp_error(device)
+
+
+class SftpWorker(threading.Thread):
+	def __init__(self, job: Job, manager):
+		super().__init__()
+		self.job = job
+		self.device = job.device
+		self.manager = manager
+		self.start_time = None
+		self.end_event = threading.Event()
+
+	def log(self, msg):
+		self.job.add_log(msg)
+
+	def run(self):
+		if self.job.error:  # If error is true from the get-go...
+			self.error()
+			return
+
+		ssh = paramiko.SSHClient()
+		ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+		try:
+			self.log("Connecting to device via SSH")
+			ssh.connect(self.device.control_ip, 22, self.device.username, self.device.password)
+			self.log("SFTP Started")
+			sftp = ssh.open_sftp()
+			try:
+				file = f"{self.device.probe_type}.{self.device.file_type.lower()}"
+				file_path = f"{FILE_DIR}/{file}"
+				dest = f"/home/{self.device.username}/{file}"
+
+				self.start_time = time.time()
+				self.job.in_progress = True
+
+				def sftp_progress(transferred, total):
+					if self.end_event.is_set():
+						raise InterruptedError("Transfer interrupted by user")
+
+					sent_mb = transferred / (1024 * 1024)
+					size_mb = total / (1024 * 1024)
+					progress_percentage = (transferred / total) * 100 if total > 0 else 0
+					self.job.done = sent_mb
+					self.job.size = size_mb
+					self.job.progress = progress_percentage
+					elapsed_time = time.time() - self.start_time
+					if elapsed_time > 0:
+						self.job.speed = sent_mb / elapsed_time
+
+				self.log(f"Transferring {file_path} to {dest}")
+				sftp.put(file_path, dest, callback=sftp_progress)
+				self.log("Probe package SFTP to device successful")
+				self.job.in_progress = False
+				self.job.completed = True
+			except InterruptedError:
+				self.log("Transfer stopped by user")
+				self.error()
+			finally:
+				sftp.close()
+
+		except Exception as e:
+			self.log(f"SFTP failed: {str(e)}")
+			self.error()
+		finally:
+			ssh.close()
+
+	def error(self):
+		self.manager.handle_sftp_error(self.device)
+		self.job.error = True
+		self.job.progress = 100
+		self.job.in_progress = False
+		self.job.completed = False
+
+	def stop(self, block=False):
+		"""Signal the thread to stop and optionally block until exited."""
+		self.end_event.set()
+		if block:
+			self.join()
+
+
+class SSHManager(threading.Thread):
+	def __init__(self, ssh_jobs):
+		super().__init__()
+		self.jobs = ssh_jobs
+		self.end_event = threading.Event()
+		self.workers = []
+	def run(self):
+		for ssh_job in self.jobs:
+			if self.end_event.is_set():
+				break
+			worker: SSHWorker = SSHWorker(ssh_job)
+			worker.start()
+			self.workers.append(worker)
+
+		for worker in self.workers:
+			worker.join()
+
+	def stop(self, block=False):
+		"""Signal the thread to stop and optionally block until exited."""
+		self.end_event.set()
+		if block is True:
+			self.join()
+
+
+class SSHWorker(threading.Thread):
+	def __init__(self, job: Job):
+		super().__init__()
+		self.device = job.device
+		self.job = job
+
+	def log(self, msg):
+		self.job.add_log(msg)
+
+	@staticmethod
+	def read_until(channel, expected, timeout=None):
+		"""Read from the channel until the expected text is found or the timeout expires."""
+		start = time.time()
+		reply = bytearray()
+		while not channel.exit_status_ready():
+			if channel.recv_ready():
+				reply.extend(channel.recv(8192))
+				if expected and expected in reply:
+					break
+			elif timeout and time.time() - start > timeout:
+				break
+			time.sleep(0.1)
+		return reply.decode('utf-8')
+
+	def authenticate(self, transport):
+		"""Authenticate to the SSH server."""
+		try:
+			self.log("Authenticating to SSH server")
+			transport.auth_password(self.device.username, self.device.password)
+			if not transport.is_authenticated():
+				raise paramiko.SSHException("Authorization failed.")
+		except paramiko.SSHException as err:
+			self.log(f"Authentication failed: {str(err)}")
+			self.error()
+			return False
+		return True
+
+	def error(self):
+		self.job.error = True
+		self.job.completed = True
+		self.job.in_progress = False
+		self.job.progress = 100
+
+	def execute_commands(self, channel, commands):
+		"""Send a list of commands to the SSH channel."""
+		for command in commands:
+			self.log(f"Executing command: {command}")
+			channel.send(command + '\n')
+			out = self.read_until(channel, b'#', 20)
+
+	def install_probe(self, channel):
+		"""Install the probe on the device."""
+		file = f"{self.device.probe_type}.{self.device.file_type.lower()}"
+		if self.device.file_type == "TAR":
+			commands = [
+				'rm -rf /opt/evertz/insite/probe',
+				'rm /lib/systemd/system/insite-probe.service',
+				'rm /usr/lib/systemd/system/insite-probe.service',
+				'rm -rf /bin/insite-probe',
+				'mkdir -p /opt/evertz/insite/probe',
+				f'mv /home/{self.device.username}/{file} /opt/evertz/insite/probe/{file}',
+				'cd /opt/evertz/insite/probe',
+				f'tar -xvf {file}',
+				'cd /opt/evertz/insite/probe/insite-probe/setup',
+				'chmod +x ./install',
+				'./install',
+				'1',
+				'y'
+			]
+		else:
+			commands = [f'dpkg -i {file}']
+
+		self.execute_commands(channel, commands)
+
+	def check_and_start_service(self, channel):
+		"""Check and start the `insite-probe` service if not running."""
+		self.log("Starting probe service")
+		systemctl = "/bin/systemctl" if self.device.probe_type in ["centos", "fedora"] else "systemctl"
+		channel.send(f'{systemctl} start insite-probe\n')
+		self.read_until(channel, b'#', 5)
+
+		channel.send(f'{systemctl} status insite-probe\n')
+		output = self.read_until(channel, b'#', 5)
+
+		if 'active (running)' not in output:
+			self.log("Probe not started. Error occurred while installing it.")
+			self.log("This was because the deployer could not confirm the status of probe service.")
+			self.error()
+		else:
+			self.log("Probe started successfully.")
+
+	def run(self):
+		if self.job.error:  # If error is true from the get-go....
+			self.error()
+			return
+
+		self.job.in_progress = True
+		self.job.progress = random.randint(7, 11)
+		self.log("Starting working on SSH job")
+		try:
+			self.log(f"Connecting to {self.device.control_ip}")
+			transport = paramiko.Transport((self.device.control_ip, 22))
+			self.log("SSH connection established")
+			transport.start_client()
+
+			if not self.authenticate(transport):
+				return
+
+			self.log("Executing SSH commands")
+			channel = transport.open_session()
+			channel.get_pty(term='vt100', width=300, height=24)
+			channel.invoke_shell()
+			self.job.progress = random.randint(27, 34)
+
+			# Gain root access
+			self.log("Switching to root shell")
+			if self.job.device.probe_type == "debian":
+				sudo = 'su\n'
+				passw = b'Password:'
+			else:
+				sudo = 'sudo -s\n'
+				passw = b'[sudo] password for'
+
+			channel.send(sudo)
+			self.read_until(channel, passw, 5)
+			channel.send(self.device.password + '\n')
+			out = self.read_until(channel, b'#', 5)
+			if '#' in out:
+				self.log("Switched to root shell")
+			else:
+				self.log("Could not gain root shell.")
+				self.error()
+				return
+
+			self.job.progress = random.randint(38, 45)
+			self.install_probe(channel)
+			self.job.progress = random.randint(80, 89)
+			self.check_and_start_service(channel)
+			self.job.completed = True
+			self.job.in_progress = False
+			self.job.progress = 100
+			transport.close()
+			self.log("SSH connection closed")
+		except paramiko.SSHException as err:
+			self.log(f"SSH Error: {str(err)}")
+			self.error()

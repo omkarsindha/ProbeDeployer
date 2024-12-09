@@ -14,17 +14,22 @@ class MainFrame(wx.Frame):
 
         self.panel = Panel(self)
 
-        menubar = wx.MenuBar()
         helpMenu = wx.Menu()
         helpMenu.Append(wx.ID_ABOUT, "&About")
-        menubar.Append(helpMenu, "&Help")
 
+        logMenu = wx.Menu()
+        logMenu.Append(wx.ID_FILE, "&Logs")
+
+        menubar = wx.MenuBar()
+        menubar.Append(helpMenu, "&Help")
+        menubar.Append(logMenu, "&Log")
         #  Binding the menu options to their methods
         self.Bind(wx.EVT_MENU, self.on_about, id=wx.ID_ABOUT)
+        self.Bind(wx.EVT_MENU, self.on_log, id=wx.ID_FILE)
         self.SetMenuBar(menubar)
 
-        self.CreateStatusBar(number=3, style=wx.STB_SIZEGRIP | wx.STB_ELLIPSIZE_END)
-        self.SetStatusWidths([-1, 300, 200])
+        self.CreateStatusBar(number=1, style=wx.STB_SIZEGRIP | wx.STB_ELLIPSIZE_END)
+        self.SetStatusWidths([-1])
         self.SetStatusText("Welcome :)",0)
 
     def on_about(self, event):
@@ -38,11 +43,25 @@ class MainFrame(wx.Frame):
         info.SetWebSite("www.evertz.com", "Evertz")
         info.AddDeveloper("Omkarsinh Sindha")
         wx.adv.AboutBox(info)
+
+    def on_log(self, event):
+        path = "logs"
+        if os.path.isdir(path):
+            os.startfile(path)
+        else:
+            self.panel.error_alert("No logs available")
+
 # End class MainFrame(wx.Frame)
+
+    def on_close(self, event: wx.CloseEvent):
+        """User wants to close the application. Forward to app_panel."""
+        # Skip event by default, so it propagates the closing the application.
+        event.Skip()
+        self.panel.stop_deployment(event)
 
 def Main():
     app = wx.App()
-    frame = MainFrame(None, title="Magnum Analytics Probe Deployer", size=(1000, 600))
+    frame = MainFrame(None, title="Magnum Analytics Probe Deployer", size=(700, 600))
     frame.Show()
     app.MainLoop()
 

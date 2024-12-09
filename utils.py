@@ -32,7 +32,6 @@ def is_positive_number(num):
         num = int(num)
         return num > 0
     except ValueError as e:
-        print(f"{num} is not a number: {e}")
         return False
 
 def is_multicast(ip):

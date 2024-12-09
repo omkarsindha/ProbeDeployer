@@ -1,3 +1,28 @@
-Spin up VMs Debian(Done) CentOS(Done) Ubuntu(Done) Fedora() SUSE() OPENSUSE()
+Spin up VMs Debian(Done) CentOS(Done) Ubuntu(Done) Fedora(Done) SUSE() OPENSUSE(Done)
 
-Currently i am working on the SCPManager() thread and SingleSCPThread()
+deb file only in ubuntu and debian                   done
+SSH Commands                                         done
+make a pop up when double clicking a list ctrl to show logs for the given job      done
+Updated Job classes into one class     done
+Log data                  (imp)  done
+Delete files              (imp)   done
+save all in wx config       done
+Check free IPS and give to fedora and opensuse vms (medium)     done
+Make sure it works on ubuntu .deb  and give a working model to Brandon then make other changes (imp)     done
+in temp sensor update the filtering when sending daily status report and doing get config on webpage data   done
+
+
+Daily report bring time down        (done)
+Apply all button             (done)
+fix bug when message notification comes with update signal   (done)
+update the old monitor to use the new version               (done)
+
+
+figure out how to do sudo onto debian or just change commands    done
+refactor the code that updates the list everytime in the probe deployer (hint - 100% check)    done
+push code onto bitbucket after you do figure
+spin up vm for suse
+
+
+
+Make sure threads do not end before all ssh finishes
